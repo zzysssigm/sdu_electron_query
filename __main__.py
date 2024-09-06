@@ -12,6 +12,9 @@ from nonebot.adapters.onebot.v11 import Bot, Event,MessageEvent, MessageSegment,
 from nonebot.params import CommandArg
 from nonebot.typing import T_State
 from nonebot_plugin_apscheduler import scheduler
+import smtplib
+from email.mime.text import MIMEText
+from email.header import Header
 
 
 
@@ -40,7 +43,7 @@ async def handle_test_command(bot: Bot, event: Event):
 
 @electron_help.handle()
 async def handle_test_command(bot: Bot, event: Event):
-    await bot.send(event, "这是一个电费余量查询以及提醒功能，使用前需要绑定对应的账户，脚本来源详见：https://jsjxsgz.qd.sdu.edu.cn/info/1086/1471.htm ，源码将在近日上传github，目前仅支持山东大学青岛校区 。\n 具体而言，需要绑定你的宿舍楼,宿舍号,以及个人账户，其中[个人账户]是你的山大V卡通6位数字。 \n可以使用: \n/电费绑定 [宿舍楼] [宿舍号] [个人账户] 指令 \n/定时提醒 指令 \n /取消提醒 指令 \n /电费解绑 指令 \n 以进行下一步操作。\n 如：/电费绑定 B2 408 114514, /电费绑定 B1 A543 191981 等")
+    await bot.send(event, "这是一个电费余量查询以及提醒功能，使用前需要绑定对应的账户，脚本来源详见：https://jsjxsgz.qd.sdu.edu.cn/info/1086/1471.htm ，bot插件的源码已上传至github(https://github.com/zzysssigm/sdu_electron_query/tree/master)，目前仅支持山东大学青岛校区 。\n具体而言，需要绑定你的宿舍楼,宿舍号,以及个人账户，其中[个人账户]是你的山大V卡通6位数字。 \n可以使用: \n/电费绑定 [宿舍楼] [宿舍号] [个人账户] 指令 \n/定时提醒 指令 \n/取消提醒 指令 \n/电费解绑 指令 \n以进行下一步操作。\n如：/电费绑定 B2 408 114514\n/电费绑定 B1 A543 191981 等\n更新日志：2024.9.6\n新增邮件发送电费定时提醒的功能；\n新增/内测功能 指令")
 
 # 定义楼号与buildingid的映射关系
 building_id_map = {
@@ -313,7 +316,34 @@ async def handle_remove_reminder_command(bot: Bot, event: Event):
 
     await bot.send(event, " 定时提醒已取消。")
 
-@scheduler.scheduled_job("cron", hour=21, minute=5)
+
+def send_email(to_email, subject, body):
+    # 发件人信息(bot)
+    sender_email = "2905326120@qq.com"
+    sender_password = "hadywnsievawddjf"  # SMTP
+
+    # SMTP 服务器
+    smtp_server = "smtp.qq.com"
+    smtp_port = 465
+
+    # 邮件内容
+    msg = MIMEText(body, 'plain', 'utf-8')
+    msg['From'] = sender_email
+    msg['To'] = to_email
+    msg['Subject'] = Header(subject, 'utf-8')
+
+    # 发送邮件
+    try:
+        with smtplib.SMTP_SSL(smtp_server, smtp_port) as server:
+            server.login(sender_email, sender_password)
+            server.sendmail(sender_email, [to_email], msg.as_string())
+        print(f"邮件已发送到 {to_email}")
+    except Exception as e:
+        print(f"发送邮件时发生错误: {e}")
+
+
+
+@scheduler.scheduled_job("cron", hour=21, minute=0)
 async def scheduled_reminder():
     bot = get_bot()  # 获取 Bot 实例
     with open(REMINDERS_FILE, "r", encoding="utf-8") as f:
@@ -324,12 +354,74 @@ async def scheduled_reminder():
     friend_ids = {friend['user_id'] for friend in friend_list}
 
     for user_id in reminders.keys():
-        if int(user_id) not in friend_ids:
-            continue  # 如果用户不是好友，则跳过，后续考虑改为发邮件提醒
 
         json_file_path = Path(f"{BINDINGS_DIR}/{user_id}.json")
+        remaining_power=0
         if json_file_path.exists():
             with open(json_file_path, "r", encoding="utf-8") as file:
                 binding_info = json.load(file)
             remaining_power = await query_electricity(binding_info)
-            await bot.send_private_msg(user_id=int(user_id), message=f" 定时提醒：当前剩余电量余额为 {remaining_power} 。")
+
+        if int(user_id) not in friend_ids:
+            # 如果用户不是好友，发送邮件提醒
+            to_email = f"{user_id}@qq.com"
+            subject = "邮件定时提醒：电量余额"
+            body = f"您当前的电量余额为：{remaining_power}。"
+            send_email(to_email, subject, body)
+            continue 
+
+        await bot.send_private_msg(user_id=int(user_id), message=f"定时提醒：当前剩余电量余额为 {remaining_power} 。")
+
+# 这是个test
+# @scheduler.scheduled_job("cron", hour=8, minute=1)
+# async def test_email():
+#     bot = get_bot()  # 获取 Bot 实例
+#     json_file_path = Path(f"{BINDINGS_DIR}/3194771270.json")
+#     remaining_power=0
+#     if json_file_path.exists():
+#         with open(json_file_path, "r", encoding="utf-8") as file:
+#             binding_info = json.load(file)
+#         remaining_power = await query_electricity(binding_info)
+
+#     print(remaining_power)
+#     to_email = "3194771270@qq.com"
+#     subject = "电量余额提醒"
+#     body = f"您当前的电量余额为：{remaining_power}。"
+#     send_email(to_email, subject, body)
+
+
+test_for_email_command = on_command("内测功能")
+
+# 定义存储内测用户QQ号的JSON文件路径
+EMAIL_USERS_FILE = Path("test_email_users.json")
+
+def load_email_users():
+    if EMAIL_USERS_FILE.exists():
+        with open(EMAIL_USERS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return []
+
+def save_email_users(users):
+    with open(EMAIL_USERS_FILE, "w", encoding="utf-8") as f:
+        json.dump(users, f, ensure_ascii=False, indent=4)
+
+test_email_users = load_email_users()
+
+@test_for_email_command.handle()
+async def handle_test_for_email_command(bot: Bot, event: Event):
+    friend_list = await bot.get_friend_list()
+    friend_ids = {friend['user_id'] for friend in friend_list}
+    user_id = event.get_user_id()  # 获取触发指令的用户QQ号
+    
+    # 检查是否是好友
+    if int(user_id) not in friend_ids:
+        await bot.send(event, message=f"用户安全起见，只有添加bot为好友才能使用内测功能")
+        return
+    
+    # 检查是否已经在列表中
+    if user_id not in test_email_users:
+        test_email_users.append(user_id)  # 将用户QQ号存入列表
+        save_email_users(test_email_users)  # 保存到JSON文件
+        await bot.send(event, message=f"已成功将您的QQ号 {user_id} 添加到内测功能体验列表！")
+    else:
+        await bot.send(event, message=f"您的QQ号 {user_id} 已经在内测功能体验列表中，无需重复添加。")
