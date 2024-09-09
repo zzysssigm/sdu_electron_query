@@ -43,7 +43,7 @@ async def handle_test_command(bot: Bot, event: Event):
 
 @electron_help.handle()
 async def handle_test_command(bot: Bot, event: Event):
-    await bot.send(event, "这是一个电费余量查询以及提醒功能，使用前需要绑定对应的账户，脚本来源详见：https://jsjxsgz.qd.sdu.edu.cn/info/1086/1471.htm ，bot插件的源码已上传至github(https://github.com/zzysssigm/sdu_electron_query/tree/master)，目前仅支持山东大学青岛校区 。\n具体而言，需要绑定你的宿舍楼,宿舍号,以及个人账户，其中[个人账户]是你的山大V卡通6位数字。 \n可以使用: \n/电费绑定 [宿舍楼] [宿舍号] [个人账户] 指令 \n/定时提醒 指令 \n/取消提醒 指令 \n/电费解绑 指令 \n以进行下一步操作。\n如：/电费绑定 B2 408 114514\n/电费绑定 B1 A543 191981 等\n更新日志：2024.9.6\n新增邮件发送电费定时提醒的功能；\n新增/内测功能 指令")
+    await bot.send(event, "这是一个电费余量查询以及提醒功能，使用前需要绑定对应的账户，脚本来源详见：https://jsjxsgz.qd.sdu.edu.cn/info/1086/1471.htm ，bot插件的源码已上传至github(https://github.com/zzysssigm/sdu_electron_query/tree/master)，目前仅支持山东大学青岛校区 。\n具体而言，需要绑定你的宿舍楼,宿舍号,以及个人账户，其中[个人账户]是你的山大V卡通6位数字。 \n可以使用: \n/电费绑定 [宿舍楼] [宿舍号] [个人账户] 指令 \n/定时提醒 指令 \n/取消提醒 指令 \n/电费解绑 指令 \n/绑定查询 指令 \n/内测功能 指令 \n以进行下一步操作。\n如：/电费绑定 B2 408 114514\n/电费绑定 B1 A543 191981 等\n更新日志：2024.9.9\n完善了电费查询的异常处理，当查询失败时会提醒检查个人账户和宿舍楼是否正确；\n新增/绑定查询 指令")
 
 # 定义楼号与buildingid的映射关系
 building_id_map = {
@@ -114,12 +114,12 @@ async def handle_first_receive(bot: Bot, event: Event):
     json_file_path = Path(f"bindings/{user_id}.json")
     if json_file_path.exists():
         if isinstance(event, GroupMessageEvent):
-            message = MessageSegment.at(user_id) + " 您已经绑定过了，如需修改绑定信息，请先使用 /电费解绑 删除旧的绑定文件。"
+            message = MessageSegment.at(user_id) + " 您已经绑定过了，如需修改绑定信息，请先使用 /电费解绑 删除旧的绑定文件，或者使用 /绑定查询 检查自己的绑定信息。"
             group_id = event.group_id
             await bot.call_api("send_group_msg", group_id=group_id, message=message)
             await query_elec.finish()
         else:
-            await bind.finish(" 您已经绑定过了，如需修改绑定信息，请先使用 /电费解绑 删除旧的绑定文件。")
+            await bind.finish(" 您已经绑定过了，如需修改绑定信息，请先使用 /电费解绑 删除旧的绑定文件，或者使用 /绑定查询 检查自己的绑定信息。")
 
     # 如果没有绑定，则生成对应的JSON文件
     os.makedirs("bindings", exist_ok=True)  # 确保bindings目录存在
@@ -164,6 +164,46 @@ async def handle_unbind(bot: Bot, event: Event):
     else:
         await unbind.finish(" 解绑成功！您的宿舍信息已删除。")
 
+query_bind = on_command("绑定查询", aliases={"查询绑定"}, priority=5)
+
+@query_bind.handle()
+async def handle_query_bind(bot: Bot, event: Event):
+    # 获取用户QQ号及消息类型
+    user_id = event.get_user_id()
+    event_type = event.get_type()
+
+    # 绑定信息的JSON文件路径
+    json_file_path = Path(f"bindings/{user_id}.json")
+
+    # 检查用户是否已经绑定过
+    if not json_file_path.exists():
+        if event_type == "group":
+            message = MessageSegment.at(user_id) + " 您尚未绑定，无法查询账户。"
+            group_id = event.group_id
+            await bot.call_api("send_group_msg", group_id=group_id, message=message)
+            await query_bind.finish()
+        else:
+            await query_bind.finish("您尚未绑定，无法查询账户。")
+
+    # 读取绑定信息
+    with open(json_file_path, 'r', encoding='utf-8') as f:
+        binding_info = json.load(f)
+
+    # 构建返回的绑定信息消息
+    account = binding_info.get("account")
+    building = binding_info.get("building", {}).get("building")
+    room = binding_info.get("room")
+    
+    response_message = f"绑定信息如下：\n个人账户: {account}\n楼栋: {building}\n房间号: {room} \n绑定规范：个人账户为用户在山大V卡通的六位数字，房间号需要注意是否带有'a' 'b'等前缀，如:A543，房间号不区分字母大小写"
+
+    # 根据消息类型发送不同的响应
+    if event_type == "group":
+        group_id = event.group_id
+        message = MessageSegment.at(user_id) + response_message
+        await bot.call_api("send_group_msg", group_id=group_id, message=message)
+    else:
+        await query_bind.finish(response_message)
+
 
 # 创建一个电费查询命令处理器
 query_elec = on_command("电费查询", aliases={"查询电费"}, priority=5)
@@ -196,7 +236,16 @@ async def handle_query_elec(bot: Bot, event: Event):
     # 查询电量信息
     remaining_power = await query_electricity(binding_info)
 
-    if remaining_power <= 8:
+    if remaining_power == -1:
+        message = MessageSegment.at(user_id) + f"没有查询到绑定账户的电量信息，请使用 /绑定查询 ，检查宿舍号或个人账户是否正确。"
+        if isinstance(event, GroupMessageEvent):
+            group_id = event.group_id  # 获取群号
+            await bot.call_api("send_group_msg", group_id=group_id, message=message)
+            await query_elec.finish()
+        else:
+            await query_elec.finish(f"没有查询到绑定账户的电量信息，请使用 /绑定查询 ，检查宿舍号或个人账户是否正确。")
+
+    elif remaining_power <= 8:
         message = MessageSegment.at(user_id) + f" 警告：电量余额为 {remaining_power} ，请尽快充值！"
         if isinstance(event, GroupMessageEvent):
             group_id = event.group_id  # 获取群号
@@ -204,6 +253,7 @@ async def handle_query_elec(bot: Bot, event: Event):
             await query_elec.finish()
         else:
             await query_elec.finish(f" 警告：剩余电量余额为 {remaining_power} ，请尽快充值！")
+
     else:
         message = MessageSegment.at(user_id) + f" 查询成功：当前剩余电量余额为 {remaining_power} 。"
         if isinstance(event, GroupMessageEvent):
@@ -266,7 +316,7 @@ async def query_electricity(binding_info):
         remaining_power = float(match.group())
         return remaining_power
     else:
-        return 0.0  # 如果没有找到电量信息，则返回0
+        return -1  # 如果没有找到电量信息，则返回-1
 
     
 set_reminder = on_command("定时提醒", priority=5)
@@ -342,7 +392,6 @@ def send_email(to_email, subject, body):
         print(f"发送邮件时发生错误: {e}")
 
 
-
 @scheduler.scheduled_job("cron", hour=21, minute=0)
 async def scheduled_reminder():
     bot = get_bot()  # 获取 Bot 实例
@@ -361,34 +410,23 @@ async def scheduled_reminder():
             with open(json_file_path, "r", encoding="utf-8") as file:
                 binding_info = json.load(file)
             remaining_power = await query_electricity(binding_info)
+        else:
+            continue
 
         if int(user_id) not in friend_ids:
             # 如果用户不是好友，发送邮件提醒
             to_email = f"{user_id}@qq.com"
             subject = "邮件定时提醒：电量余额"
             body = f"您当前的电量余额为：{remaining_power}。"
+            if remaining_power == -1:
+                body = "没有查询到绑定账户的电量信息，请检查宿舍号或个人账户是否正确。"
             send_email(to_email, subject, body)
             continue 
 
-        await bot.send_private_msg(user_id=int(user_id), message=f"定时提醒：当前剩余电量余额为 {remaining_power} 。")
-
-# 这是个test
-# @scheduler.scheduled_job("cron", hour=8, minute=1)
-# async def test_email():
-#     bot = get_bot()  # 获取 Bot 实例
-#     json_file_path = Path(f"{BINDINGS_DIR}/3194771270.json")
-#     remaining_power=0
-#     if json_file_path.exists():
-#         with open(json_file_path, "r", encoding="utf-8") as file:
-#             binding_info = json.load(file)
-#         remaining_power = await query_electricity(binding_info)
-
-#     print(remaining_power)
-#     to_email = "3194771270@qq.com"
-#     subject = "电量余额提醒"
-#     body = f"您当前的电量余额为：{remaining_power}。"
-#     send_email(to_email, subject, body)
-
+        if remaining_power == -1:
+            await bot.send_private_msg(user_id=int(user_id), message=f"没有查询到绑定账户的电量信息，请检查宿舍号或个人账户是否正确。")
+        else:
+            await bot.send_private_msg(user_id=int(user_id), message=f"定时提醒：当前剩余电量余额为 {remaining_power} 。")
 
 test_for_email_command = on_command("内测功能")
 
